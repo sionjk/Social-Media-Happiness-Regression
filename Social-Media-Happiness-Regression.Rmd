@@ -1,0 +1,385 @@
+---
+title: "Project 2"
+author: "Sion King"
+date: "2025-11-04"
+output: word_document
+---
+
+```{r}
+# R script to reproduce happiness modeling pipeline
+
+library(readr)
+library(dplyr)
+library(caret)
+library(car)
+library(ggplot2)
+
+# --- Load dataset ---
+data <- read.csv("C:/Users/coolm/Onedrive/Documents/Mental_Health_and_Social_Media_Balance_Dataset.csv")
+
+# Use 'df' consistently
+df <- data
+
+# --- Drop ID-like columns if present 6D ---
+for(n in c('User_ID','UserId','id','ID','Id','index')) {
+  if(n %in% colnames(df)) {
+    df <- df %>% select(-all_of(n))
+  }
+}
+
+# --- Handle the target variable ---
+# Check what the exact column name for happiness is
+colnames(df)
+
+# If the column is named "Happiness_Index.1.10.", use this 6A:
+df$Happiness_Index.1.10.[is.na(df$Happiness_Index.1.10.)] <- mean(df$Happiness_Index.1.10., na.rm=TRUE)
+
+# --- Set up predictors 5A---
+predictors <- setdiff(colnames(df), 'Happiness_Index.1.10.')
+cat_cols <- predictors[sapply(df[predictors], function(x) is.character(x) | is.factor(x))]
+
+# --- Dummy encode categorical variables 6D ---
+if(length(cat_cols) > 0) {
+  dummies <- dummyVars(~ ., data = df[predictors], fullRank = TRUE)
+  X <- predict(dummies, newdata = df[predictors])
+} else {
+  X <- as.matrix(df[predictors])
+}
+
+# --- Replace missing values in predictors 6A---
+for(i in 1:ncol(X)) {
+  if(any(is.na(X[,i]))) X[is.na(X[,i]), i] <- mean(X[,i], na.rm=TRUE)
+}
+
+# --- Create final model dataset 6 and 7 ---
+data_model <- data.frame(happiness = df$Happiness_Index.1.10., X)
+
+# --- Correlation matrix 5B---
+cors <- cor(data_model)
+write.csv(cors[,'happiness'], file='C:/Users/jesge/Downloads/corr_with_happiness_r.csv')
+
+# --- Fit linear model 7c and 7D---
+lm_full <- lm(happiness ~ ., data = data_model)
+write.csv(data.frame(VIF = vif(lm_full)), file='C:/Users/jesge/Downloads/vif_happiness_r.csv')
+
+# --- Cross-validation with caret 8B---
+set.seed(42)
+train_control <- trainControl(method='cv', number=10)
+model <- train(happiness ~ ., data = data_model, method='lm', trControl = train_control)
+print(model)
+
+# --- Save model for later use 11---
+saveRDS(model, file='C:/Users/jesge/Downloads/happiness_model_rds.rds')
+
+```
+
+```{r}
+# ================================
+# Part 5b: Data Visualization
+# ================================
+
+library(ggplot2)
+library(GGally)
+library(corrplot)
+library(dplyr)
+
+# --- Histogram of Happiness ---
+ggplot(df, aes(x = Happiness_Index.1.10.)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  labs(
+    title = "Distribution of Happiness Scores",
+    x = "Happiness (1–10 Scale)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+# --- Boxplot of Happiness vs. Social Media Usage (if that column exists) ---
+if("Social_Media_Usage" %in% names(df)) {
+  ggplot(df, aes(x = Social_Media_Usage, y = Happiness_Index.1.10., fill = Social_Media_Usage)) +
+    geom_boxplot() +
+    labs(
+      title = "Happiness by Social Media Usage Category",
+      x = "Social Media Usage Level",
+      y = "Happiness (1–10)"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "none")
+}
+
+# --- Pairwise scatterplots between numeric variables ---
+numeric_df <- df %>% select(where(is.numeric))
+GGally::ggpairs(
+  numeric_df[, 1:min(6, ncol(numeric_df))],  # show first 6 numeric columns to keep it readable
+  title = "Pairwise Relationships Between Key Variables"
+)
+
+# --- Correlation heatmap ---
+corr_matrix <- cor(numeric_df, use = "complete.obs")
+corrplot(
+  corr_matrix,
+  method = "color",
+  tl.cex = 0.8,
+  addCoef.col = "black",
+  number.cex = 0.7,
+  title = "Correlation Heatmap of Numeric Variables",
+  mar = c(0,0,1,0)
+)
+
+# --- Scatterplot of Happiness vs. Screen Time (if available) ---
+if("Screen_Time" %in% names(df)) {
+  ggplot(df, aes(x = Screen_Time, y = Happiness_Index.1.10.)) +
+    geom_point(color = "steelblue") +
+    geom_smooth(method = "lm", se = FALSE, color = "red") +
+    labs(
+      title = "Relationship Between Screen Time and Happiness",
+      x = "Average Daily Screen Time (hours)",
+      y = "Happiness (1–10)"
+    ) +
+    theme_minimal()
+}
+
+```
+
+
+
+```{r pressure, echo=FALSE}
+# ==================================
+# Part 5c: Checking Regression Assumptions
+# ==================================
+
+library(ggplot2)
+library(car)
+library(gridExtra)
+
+# --- 1️⃣ Linearity & Homoscedasticity ---
+# Residuals vs Fitted plot
+plot(lm_full, which = 1, main = "Residuals vs Fitted")
+
+# This plot should show random scatter around 0.
+# If there’s a curve or funnel shape, it suggests non-linearity or heteroscedasticity.
+
+
+# --- 2️⃣ Normality of Residuals ---
+# QQ Plot
+plot(lm_full, which = 2, main = "Normal Q-Q Plot of Residuals")
+
+# Shapiro–Wilk Test (more formal test)
+shapiro.test(residuals(lm_full))
+
+# If p-value > 0.05, residuals are approximately normal.
+
+
+# --- 3️⃣ Homoscedasticity (Equal Variance) ---
+# Breusch–Pagan test
+car::ncvTest(lm_full)
+
+# If p-value > 0.05, variances are roughly equal.
+
+
+# --- 4️⃣ Multicollinearity ---
+car::vif(lm_full)
+# VIF > 5 or 10 suggests collinearity problems.
+
+
+# --- 5️⃣ Influence and Leverage Diagnostics ---
+# Cook’s Distance
+plot(lm_full, which = 4, main = "Cook’s Distance (Influence)")
+
+# Influence Plot
+car::influencePlot(lm_full, main = "Influence Plot", id.method = "identify", sub = "Circle size ∝ Cook’s Distance")
+
+# Observations with large Cook’s distance or leverage may be influential outliers.
+
+
+# --- 6️⃣ Residual Histogram ---
+res_df <- data.frame(residuals = residuals(lm_full))
+ggplot(res_df, aes(x = residuals)) +
+  geom_histogram(binwidth = 0.2, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Model Residuals", x = "Residuals", y = "Frequency") +
+  theme_minimal()
+
+# --- 7️⃣ Optional: Save all diagnostic plots together ---
+png("C:/Users/jesge/Downloads/happiness_regression_diagnostics.png", width = 1000, height = 800)
+par(mfrow = c(2, 2))
+plot(lm_full)
+dev.off()
+
+```
+```{r}
+# ==================================
+# Part 5d: Collinearity Evaluation
+# ==================================
+
+library(car)
+library(caret)
+library(dplyr)
+
+# Step 1️⃣: Check Variance Inflation Factor (VIF)
+vif_values <- car::vif(lm_full)
+vif_table <- data.frame(Variable = names(vif_values), VIF = vif_values)
+print(vif_table)
+
+# Save to CSV for your report
+write.csv(vif_table, "C:/Users/jesge/Downloads/vif_values.csv", row.names = FALSE)
+
+# Step 2️⃣: Identify problematic predictors
+# (Rules of thumb: VIF > 5 indicates moderate collinearity, VIF > 10 is high)
+high_vif <- vif_table %>% filter(VIF > 5)
+print(high_vif)
+
+# Step 3️⃣: If any VIFs are too high, consider removing those predictors and refitting the model
+if (nrow(high_vif) > 0) {
+  message("High VIF detected. Refitting model without these variables...")
+  
+  # Create new dataset without high-VIF predictors
+  keep_vars <- setdiff(names(data_model), high_vif$Variable)
+  
+  # Refit the model
+  lm_reduced <- lm(happiness ~ ., data = data_model[, keep_vars])
+  
+  # Compare models
+  print(summary(lm_full)$adj.r.squared)
+  print(summary(lm_reduced)$adj.r.squared)
+  
+  # New VIFs
+  new_vif <- car::vif(lm_reduced)
+  print(new_vif)
+  
+  # Save comparison results
+  write.csv(data.frame(
+    Model = c("Full", "Reduced"),
+    Adj_R2 = c(summary(lm_full)$adj.r.squared, summary(lm_reduced)$adj.r.squared)
+  ), "C:/Users/jesge/Downloads/model_comparison.csv", row.names = FALSE)
+  
+  # Save new model
+  saveRDS(lm_reduced, "C:/Users/jesge/Downloads/happiness_model_reduced.rds")
+}
+
+# Step 4️⃣: Optionally visualize VIFs
+library(ggplot2)
+ggplot(vif_table, aes(x = reorder(Variable, VIF), y = VIF)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  geom_hline(yintercept = 5, color = "orange", linetype = "dashed") +
+  geom_hline(yintercept = 10, color = "red", linetype = "dashed") +
+  labs(title = "Variance Inflation Factors (VIF)",
+       x = "Predictor Variables",
+       y = "VIF Value") +
+  theme_minimal()
+
+ggsave("C:/Users/jesge/Downloads/vif_plot.png", width = 8, height = 6)
+```
+
+```{r}
+# Part 6: Model Evaluation
+summary(model$finalModel)  # Detailed model output
+print(model$results)       # Cross-validation metrics
+
+# Predicted vs Actual
+preds <- predict(model, newdata = data_model)
+eval_df <- data.frame(Actual = data_model$happiness, Predicted = preds)
+write.csv(eval_df, "C:/Users/jesge/Downloads/predicted_vs_actual.csv", row.names = FALSE)
+
+# Visualize fit
+ggplot(eval_df, aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs(title = "Predicted vs Actual Happiness",
+       x = "Actual Happiness", y = "Predicted Happiness") +
+  theme_minimal()
+
+ggsave("C:/Users/jesge/Downloads/pred_vs_actual_plot.png", width = 7, height = 5)
+```
+
+```{r}
+# ----------------------------
+# 7a–7f: Modeling Section
+# ----------------------------
+
+library(dplyr)
+library(car)
+library(caret)
+library(ggplot2)
+
+# Load dataset
+df <- read.csv("C:/Users/jesge/Downloads/Mental_Health_and_Social_Media_Balance_Dataset.csv")
+
+# Handle missing values if any
+df <- df %>% mutate(across(everything(), ~ ifelse(is.na(.), mean(., na.rm = TRUE), .)))
+
+# ----------------------------
+# 7a. Univariate model exploration
+# ----------------------------
+# Fit simple linear regressions of Happiness_Index.1.10. on each continuous variable
+continuous_vars <- c("Age", "Daily_Screen_Time.hrs.", "Sleep_Quality.1.10.", 
+                     "Stress_Level.1.10.", "Days_Without_Social_Media", 
+                     "Exercise_Frequency.week.")
+
+uni_results <- lapply(continuous_vars, function(var) {
+  model <- lm(as.formula(paste("Happiness_Index.1.10. ~", var)), data = df)
+  summary(model)$coefficients[2, c("Estimate", "Pr(>|t|)")]
+})
+names(uni_results) <- continuous_vars
+uni_results
+
+# ----------------------------
+# 7b. Interaction and confounding exploration
+# ----------------------------
+# Check a few potential interactions (e.g., Stress × Sleep, ScreenTime × Exercise)
+interaction_model <- lm(Happiness_Index.1.10. ~ Stress_Level.1.10. * Sleep_Quality.1.10. + 
+                          Daily_Screen_Time.hrs. * Exercise_Frequency.week. + 
+                          Age + Gender + Days_Without_Social_Media + Social_Media_Platform, data = df)
+summary(interaction_model)
+
+# ----------------------------
+# 7c. Comprehensive model
+# ----------------------------
+lm_full <- lm(Happiness_Index.1.10. ~ ., data = df)
+summary(lm_full)
+
+# ----------------------------
+# 7d. Simplified stepwise regression with a smaller starting model
+lm_start <- lm(Happiness_Index.1.10. ~ Sleep_Quality.1.10. + 
+                 Stress_Level.1.10. + 
+                 Daily_Screen_Time.hrs. + 
+                 Exercise_Frequency.week. + 
+                 Days_Without_Social_Media,
+               data = df)
+
+step_model <- step(lm_start, direction = "both", trace = FALSE)
+summary(step_model)
+
+# ----------------------------
+# 7e. Model Diagnostics (Regression Assumptions)
+
+# 1. Linearity — plot residuals vs fitted values
+plot(step_model$fitted.values, resid(step_model),
+     main = "Residuals vs Fitted (Linearity Check)",
+     xlab = "Fitted Values", ylab = "Residuals")
+abline(h = 0, col = "red")
+
+# 2. Normality of residuals — Q-Q plot + Shapiro-Wilk test
+qqnorm(resid(step_model))
+qqline(resid(step_model), col = "red")
+shapiro_test <- shapiro.test(resid(step_model))
+print(shapiro_test)
+
+# 3. Homoscedasticity (equal variance) — Breusch-Pagan test
+library(lmtest)
+bp_test <- bptest(step_model)
+print(bp_test)
+
+# 4. Independence of errors — Durbin-Watson test
+library(car)
+dw_test <- durbinWatsonTest(step_model)
+print(dw_test)
+
+# ----------------------------
+# 7f. Final best model
+# ----------------------------
+summary(step_model)
+
+# Save final model if needed
+saveRDS(step_model, "final_happiness_model.rds")
+
+```
